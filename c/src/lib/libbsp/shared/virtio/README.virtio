@@ -1,0 +1,72 @@
+/*
+ * Authors: Jin-Hyun Kim <jinhyun@konkuk.ac.kr>, 
+ *   and Hyun-Wook Jin <jinh@konkuk.ac.kr>, http://sslab.konkuk.ac.kr
+ * Ported from FreeBSD to RTEMS March 16
+ *
+ * The license and distribution terms for this file may be
+ * found in the file LICENSE in this distribution or at
+ * http://www.rtems.org/license/LICENSE.NET
+ */
+
+1. Introduction
+---------------
+
+	This document explains how to setup RTEMS so that RTEMS applications can be
+built for and run with the virtio network driver. The virtio network driver is
+ported from FreeBSD release 10.0.0, and RTEMS specific changes of the driver are
+ ifdef'ed by __rtems__.
+
+
+2. Building RTEMS kernel with the virtio network driver
+-------------------------------------------------------
+
+	When running configure, you need to use following values for the listed
+options with an i386-rtems toolset. The original virtio network driver of
+FreeBSD works with various CPUs, but the virtio network driver for RTEMS is only
+tested on i386-pc386, yet.
+	
+		--target=i386-rtems
+		--enable-rtemsbsp=pc386
+		
+
+3. Building RTEMS applications with virtio network driver
+---------------------------------------------------------
+
+	You can use virtio network driver in the same way with other network drivers
+of RTEMS, but you have to set the mbuf cluster space so that it can be larger
+than 512KB because the virtio network driver uses 256 mbuf clusters for Rx. An
+example of network configuration is as follows.
+
+	extern int rtems_vtnet_driver_attach(struct rtems_bsdnet_ifconfig *, int)
+	static struct rtems_bsdnet_ifconfig virtio_config[]={
+	  {
+	  "vio1", rtems_vtnet_driver_attach, NULL,
+	  },
+	};
+	struct rtems_bsdnet_config rtems_bsdnet_config = {
+		virtio_config,		/* link to next interface */
+		0,					/* Use BOOTP to get network configuration */
+		150,				/* Network task priority */
+		128*1024,			/* MBUF space */
+		512*1024,			/* MBUF cluster space */
+		...
+	}
+
+4. Running virtual machine with virtio network device
+-----------------------------------------------------
+
+	To use the virtio network driver, the hypervisor has to support virtio
+network device. The current implementation can successfully run with KVM and
+VirtualBox on i386. Example commands for these hypervisors are as follows.
+	
+	For KVM:
+ 
+	$ qemu-system-i386 -enable-kvm -no-shutdown -m 128 \
+		-boot a -fda rtems-boot.img \
+		-hda hdd.img -net nic,model=virtio -net tap,ifname=tap0,script=no \
+		-monitor stdio
+		
+	For VirtualBox:
+ 
+ 	$ VBoxManage modifyvm RTEMS-4.11 --nictype1 virtio
+ 	$ VBoxManage startvm RTEMS-4.11
