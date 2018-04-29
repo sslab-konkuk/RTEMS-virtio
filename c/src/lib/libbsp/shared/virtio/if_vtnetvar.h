@@ -30,6 +30,8 @@
 #define _IF_VTNETVAR_H
 
 #define RTEMS_RXQ_DYNAMIC
+#define RTEMS_RXQ_BUFINIT	2
+#define RTEMS_RXQ_BUFMAX	0x100
 
 struct vtnet_softc;
 struct vtpci_softc;

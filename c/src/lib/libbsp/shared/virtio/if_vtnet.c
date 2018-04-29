@@ -3173,8 +3173,9 @@ vtnet_init_rx_queues(struct vtnet_softc *sc)
 	for (i = 0; i < sc->vtnet_act_vq_pairs; i++) {
 		rxq = &sc->vtnet_rxqs[i];
 #ifdef RTEMS_RXQ_DYNAMIC
-		rxq->vtnrx_nentries = virtqueue_size(rxq->vtnrx_vq);
-		rxq->vtnrx_threshold = 2;
+		int qsize = virtqueue_size(rxq->vtnrx_vq);
+		rxq->vtnrx_nentries = RTEMS_RXQ_BUFMAX > qsize ? qsize : RTEMS_RXQ_BUFMAX;
+		rxq->vtnrx_threshold = RTEMS_RXQ_BUFINIT;
 #endif
 
 		/* Hold the lock to satisfy asserts. */

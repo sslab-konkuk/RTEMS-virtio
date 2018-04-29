@@ -1,0 +1,172 @@
+Virtio Network Driver for RTEMS
+===============================
+
+Written by Jin-Hyun Kim <zecheki@gmail.com> and
+			 Hyun-Wook Jin <jinh@konkuk.ac.kr>
+
+Copyright (C) 2016-2018 SSLab@KU, http://sslab.konkuk.ac.kr
+
+
+Contents
+--------
+
+1. Introduction
+2. Building RTEMS kernel with the virtio network driver
+3. Building RTEMS applications with virtio
+4. Running RTEMS on a virtual machine with virtio
+5. Dynamic scale-up of network buffers
+6. To do list
+
+
+1. Introduction
+---------------
+
+	This document describes the user guide of the virtio network
+driver for RTEMS developed by Jin-Hyun Kim <zecheki@gmail.com> and
+Hyun-Wook Jin <jinh@konkuk.ac.kr>. Virtio is the standard for virtual
+I/O devices. It was initially suggested by IBM and became an OASIS
+standard. The virtio standard defines para-virtualized interfaces
+between front-end and back-end drivers. The virtio network driver for
+RTEMS is an implementation of the front-end network driver for RTEMS
+real-time operating system. It has been implemented based on that in
+the FreeBSD release 10.0.0. The RTEMS specific changes are ifdef'ed by
+__rtems__. The patched source codes have been released under FreeBSD
+license at https://github.com/sslab-konkuk/RTEMS-virtio/ as follows:
+Version 1.0: released the basic implementation on October 16, 2016
+Version 1.1: extended for dynamic buffer management on April 24, 2018
+
+
+2. Building RTEMS kernel with the virtio network driver
+-------------------------------------------------------
+
+	To build the RTEMS kernel with the virtio network driver, you first
+need to add the driver to the BSP makefile of RTEMS. We provide the
+makefile(c/src/lib/libbsp/i386/pc386/Makfile.am) already edited based
+on that in RTEMS 4.11-pc386 for your reference. If there are any
+changes on the BSP makefile, you need to write your own makefile. Here
+is the code lines added to the makefile:
+
+	if HAS_NETWORKING
+	vtnet_CPPFLAGS = -D__INSIDE_RTEMS_BSD_TCPIP_STACK__
+	noinst_PROGRAMS += vtnet.rel
+	vtnet_rel_SOURCES = ../../shared/virtio/virtio.h
+	vtnet_rel_SOURCES += ../../shared/virtio/virtio_ring.h
+	vtnet_rel_SOURCES += ../../shared/virtio/virtio.c
+	vtnet_rel_SOURCES += ../../shared/virtio/virtqueue.h
+	vtnet_rel_SOURCES += ../../shared/virtio/virtqueue.c
+	vtnet_rel_SOURCES += ../../shared/virtio/virtio_pci.h
+	vtnet_rel_SOURCES += ../../shared/virtio/virtio_pci.c
+	vtnet_rel_SOURCES += ../../shared/virtio/virtio_net.h
+	vtnet_rel_SOURCES += ../../shared/virtio/if_vtnetvar.h
+	vtnet_rel_SOURCES += ../../shared/virtio/if_vtnet.c
+	vtnet_rel_CPPFLAGS = $(AM_CPPFLAGS) $(vtnet_CPPFLAGS)
+	vtnet_rel_LDFLAGS = $(RTEMS_RELLDFLAGS)
+	vtnet_rel_LDFLAGS += -Wl, --undefined=rtems_vtnet_driver_attach
+	endif
+	...
+	libsp_a_LIBADD += vtnet.rel
+	...
+
+	Then, when you configure the RTEMS kernel, you need to specify an
+appropriate target system. The virtio network driver for RTEMS is
+tested on i386-pc386 and powerpc-qemuprep.
+
+	For i386-pc386:
+		--target=i386-rtems
+		--enable-rtemsbsp=pc386
+
+	For powerpc-qemuprep:
+		--target=powerpc-rtems
+		--enable-rtemsbsp=qemuprep
+
+
+3. Building RTEMS applications with virtio
+---------------------------------------------------------
+
+	Your applications can use virtio in the almost same way with other
+network devices of RTEMS. You can refer the network-demos project of
+RTEMS git(https://git.rtems.org/network-demos/). One thing you need to
+note is that, in networkconfig.h, the mbuf cluster space must be
+larger than 512KB because the virtio network driver uses 256 mbuf
+clusters for Rx. Otherwise, you may experience a failure at the driver
+initialization phase if the dynamic buffer scale-up described in
+section 5 is enabled or at the runtime if it is disabled. An example
+of network configuration to set the mbuf cluster space into 512*1024
+is as follows:
+
+	extern int rtems_vtnet_driver_attach(struct rtems_bsdnet_ifconfig *, int);
+	static struct rtems_bsdnet_ifconfig virtio_config[]={
+	  {
+	  "vio1", rtems_vtnet_driver_attach, NULL,
+	  },
+	};
+	struct rtems_bsdnet_config rtems_bsdnet_config = {
+		virtio_config,		/* link to next interface */
+		0,					/* Use BOOTP to get network configuration */
+		150,				/* Network task priority */
+		128*1024,			/* MBUF space */
+		512*1024,			/* MBUF cluster space */
+		...
+	};
+	
+
+4. Running RTEMS on a virtual machine with virtio
+-----------------------------------------------------
+
+	To use the virtio from guest domain, the hypervisor has to support
+the virtio network device. The current implementation of our virtio
+driver can successfully run with KVM-i386 and QEMU-PPC. Example
+commands for these hypervisors are as follows:
+
+	For KVM-i386:
+
+	$ qemu-system-i386 -enable-kvm -no-shutdown -m 128 \
+		-boot a -fda rtems-boot.img \
+		-hda hdd.img -net nic,model=virtio -net tap,ifname=tap0,script=no \
+		-monitor stdio
+
+	For QEMU-PPC:
+
+	$ qemu-system-ppc -M prep -cpu 603 -m 256 \
+	-kernel rtems_app.ralf \
+	-bios qemu_fakerom.bin -net nic,model=virtio -net tap,ifname=tap0,script=no
+
+
+5. Dynamic scale-up of network buffers
+---------------------------------
+
+	To improve the memory efficiency without sacrificing the network bandwidth,
+new feature called "Dynamic scale-up of network buffers" is added. If
+this feature is enabled, only two network buffers are allocated at the
+initialization time. If the driver notices that more network buffers
+are required as an application experiences a buffer shortage, the
+driver dynamically allocates additional network buffers. This dynamic
+allocation is continued until the driver has 256 network buffers. By
+this feature, the driver can support the bandwidth required by the
+application, using just the memory size it needs.
+	In if_vtentvar.h file, there are several definitions to configure the
+feature. You can enable/disable the feature by defining/undefining
+"RTEMS_RXQ_DYNMIC". "RTEMS_RXQ_BUFINIT" decides the number of network
+buffers allocated at the driver initialization phase.
+"RTEMS_RXQ_BUFMAX" decides the maximum number of network buffers which
+can be allocated by the driver. This should not be larger than the
+number supported by hypervisors.
+
+
+6. To do list
+-------------
+
+	i) The virtio network driver for RTEMS also runs on VirtualBox.
+However, the latency numbers go up and down alternately. It seems that
+this also happens with FreeBSD over VirtualBox; thus, we need to
+investigate further if this is due to codes for RTEMS. You can also
+test it by running VirtualBox as follows:
+
+	$ VBoxManage modifyvm RTEMS-4.11 --nictype1 virtio
+	$ VBoxManage startvm RTEMS-4.11
+
+	ii) The virtio network driver can also support packet checksum, TSO,
+and GSO However, the current implementation of the driver (version 1.1)
+does not support these features.
+
+
